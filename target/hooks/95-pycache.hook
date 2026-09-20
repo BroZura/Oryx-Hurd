@@ -1,0 +1,26 @@
+# Debian ships .pyc files inside its python3-* packages and cleans them up
+# from a maintainer script. Oryx's Python packages are built from PyPI wheels,
+# which contain no .pyc at all -- and they cannot: the Dell builds them on
+# CPython 3.13 while the target runs 3.14, and a .pyc carries a magic number
+# the target would reject.
+#
+# So the interpreter writes __pycache__ itself, on first import, as root.
+# Those files belong to no package, so `pacman -R` leaves the directories
+# behind full of orphaned .pyc. The next install of the same package then
+# sees existing files it does not own.
+#
+# Byte-compiling here is NOT a speed measure -- it was measured at no
+# detectable gain on this machine (0.35 s to import RNS either way). It is
+# done so the .pyc exist at a known point and the matching cleanup on Remove
+# has something predictable to remove.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/python3/dist-packages/*
+
+[Action]
+Description = Byte-compiling Python modules and pruning orphaned __pycache__...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-pycache

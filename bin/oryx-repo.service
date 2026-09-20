@@ -1,0 +1,40 @@
+# Keep the Oryx repository served across reboots of the Dell.
+#
+# Without this, oryx-serve.sh is a foreground process in whatever terminal
+# started it, and the T400 loses its package source the moment that terminal
+# closes or the machine reboots.
+#
+# Install as a USER unit -- no root, no system-wide service:
+#
+#     mkdir -p ~/.config/systemd/user
+#     cp oryx-repo.service ~/.config/systemd/user/
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now oryx-repo.service
+#
+# User units stop at logout unless lingering is on. For a repository that
+# should be reachable whenever the Dell is up:
+#
+#     sudo loginctl enable-linger $USER
+#
+# Status and logs:
+#
+#     systemctl --user status oryx-repo.service
+#     journalctl --user -u oryx-repo.service -f
+#
+# Note this listens on 0.0.0.0:8099 with no authentication and serves
+# unsigned packages. That is a deliberate choice for a LAN repository of
+# locally repackaged binaries; do not expose the port beyond the LAN.
+
+[Unit]
+Description=Oryx Hurd package repository (HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStart=%h/Desktop/hurd/oryx/bin/oryx-serve.sh %h/Desktop/hurd/repo 8099
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

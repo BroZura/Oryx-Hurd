@@ -1,0 +1,63 @@
+#!/bin/sh
+#
+# oryx-alternatives -- recreate Debian update-alternatives links.
+#
+# Called by /etc/pacman.d/hooks/30-alternatives.hook.
+#
+# WHY: deb2pkg drops maintainer scripts, and on hurd-i386 several core
+# commands exist ONLY as alternatives. The hurd package ships ps-hurd,
+# uptime-hurd, vmstat-hurd, reboot-hurd, halt-hurd, poweroff-hurd; procps
+# ships ps.procps, kill.procps and friends. The plain names -- `ps`,
+# `uptime`, `reboot`, `halt`, `poweroff` -- are created by postinst, so
+# without this they do not exist at all.
+#
+# Mirrors Debian's two-level layout so a real update-alternatives later is not
+# confused:   /usr/bin/ps -> /etc/alternatives/ps -> /usr/bin/ps-hurd
+#
+# The -hurd variants win where both exist; that is Debian's intent on this
+# architecture, and Hurd's own ps understands Mach tasks properly.
+#
+# MUST exit 0 no matter what: a failing pacman hook aborts the transaction.
+set -u
+
+mkdir -p /etc/alternatives 2>/dev/null || exit 0
+
+# name : dir : providers, best first
+LINKS="
+ps:/usr/bin:ps-hurd ps.procps
+uptime:/usr/bin:uptime-hurd uptime.procps
+vmstat:/usr/bin:vmstat-hurd vmstat.procps
+w:/usr/bin:w-hurd
+kill:/usr/bin:kill.procps
+fakeroot:/usr/bin:fakeroot-hurd
+reboot:/usr/sbin:reboot-hurd
+halt:/usr/sbin:halt-hurd
+poweroff:/usr/sbin:poweroff-hurd
+"
+
+changed=0
+echo "$LINKS" | while IFS=: read -r name dir providers; do
+    [ -n "$name" ] || continue
+
+    target=""
+    for p in $providers; do
+        [ -x "$dir/$p" ] && { target="$dir/$p"; break; }
+    done
+    [ -n "$target" ] || continue
+
+    # Never clobber a real file; only fill a gap or repoint our own symlink.
+    if [ -e "$dir/$name" ] && [ ! -L "$dir/$name" ]; then
+        continue
+    fi
+
+    # Skip if already pointing where we want.
+    cur=$(readlink -f "$dir/$name" 2>/dev/null || true)
+    [ "$cur" = "$target" ] && continue
+
+    ln -sfn "$target" "/etc/alternatives/$name" 2>/dev/null || continue
+    ln -sfn "/etc/alternatives/$name" "$dir/$name" 2>/dev/null || continue
+    echo "    $name -> ${target##*/}"
+    changed=1
+done
+
+exit 0

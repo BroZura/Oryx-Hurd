@@ -1,0 +1,19 @@
+#!/bin/sh
+# Regenerate /etc/ca-certificates.conf and the CA bundle.
+#
+# ca-certificates' postinst generates BOTH of these. Without them every HTTPS
+# client fails; pip's symptom is a bare FileNotFoundError out of
+# certifi.where(), because Debian patches certifi to use the system bundle.
+# Running update-ca-certificates alone is not enough -- it reads the .conf
+# that is also missing.
+# Never fails: a failing hook aborts the pacman transaction.
+set -u
+[ -d /usr/share/ca-certificates ] || exit 0
+command -v update-ca-certificates >/dev/null 2>&1 || exit 0
+( cd /usr/share/ca-certificates && find . -name '*.crt' | sed 's|^\./||' | sort ) \
+    > /etc/ca-certificates.conf 2>/dev/null || exit 0
+update-ca-certificates >/dev/null 2>&1 || echo "    warning: update-ca-certificates failed (ignored)"
+if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
+    echo "    $(grep -c 'BEGIN CERTIFICATE' /etc/ssl/certs/ca-certificates.crt) CAs"
+fi
+exit 0

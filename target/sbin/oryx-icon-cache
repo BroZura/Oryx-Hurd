@@ -1,0 +1,10 @@
+#!/bin/sh
+# Rebuild GTK icon caches for every installed icon theme.
+# Never fails: a failing hook aborts the pacman transaction.
+set -u
+command -v gtk-update-icon-cache >/dev/null 2>&1 || exit 0
+for d in /usr/share/icons/*/; do
+    [ -f "$d/index.theme" ] || continue
+    gtk-update-icon-cache -q -t -f "$d" >/dev/null 2>&1 || true
+done
+exit 0

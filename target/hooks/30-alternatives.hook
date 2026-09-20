@@ -1,0 +1,16 @@
+# On hurd-i386 several core commands exist ONLY as update-alternatives links:
+# the hurd package ships ps-hurd/uptime-hurd/reboot-hurd/..., procps ships
+# ps.procps/kill.procps/... and the plain names come from postinst. Without
+# this, `ps`, `uptime`, `reboot`, `halt` and `poweroff` do not exist at all.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/bin/*-hurd
+Target = usr/sbin/*-hurd
+Target = usr/bin/*.procps
+
+[Action]
+Description = Rebuilding alternatives links...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-alternatives

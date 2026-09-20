@@ -1,0 +1,26 @@
+#! /bin/sh
+# Create system users and groups declared by sysusers.d fragments.
+#
+# THE GAP THIS CLOSES, and it cost remote access to the box once:
+#
+# Debian packages create their system users from a maintainer script or a
+# sysusers.d fragment. The converter drops maintainer scripts, and nothing on
+# Oryx ran sysusers.d, so the users were simply never created. base-passwd's
+# masters do not contain them either -- they only carry the base set.
+#
+# openssh-server 10.5 needs a privilege-separation user `sshd`. Without it
+# sshd accepts the TCP connection and its child dies before sending a banner,
+# so the failure looks like "Connection reset by peer" and nothing else.
+# Upgrading openssh over ssh with no sshd user therefore locks you out.
+#
+# Every handler MUST exit 0: a failing hook aborts the whole pacman
+# transaction, which would be a far worse failure than a missing user.
+set -u
+[ -x /usr/bin/systemd-sysusers ] || exit 0
+/usr/bin/systemd-sysusers 2>/dev/null || true
+# The privsep directory lives in /run and so does not survive a boot; the ssh
+# init script recreates it, but a fresh install has not run that yet.
+if grep -q '^sshd:' /etc/passwd 2>/dev/null && [ ! -d /run/sshd ]; then
+    mkdir -p /run/sshd 2>/dev/null && chmod 0755 /run/sshd 2>/dev/null
+fi
+exit 0

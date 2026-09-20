@@ -1,0 +1,15 @@
+# Debian runs ldconfig from a dpkg trigger. pacman has no such thing and the
+# converter drops maintainer scripts, so the shared-library cache is never
+# rebuilt after installing a library.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/*.so*
+Target = usr/lib/i386-gnu/*.so*
+
+[Action]
+Description = Updating shared library cache...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-ldconfig

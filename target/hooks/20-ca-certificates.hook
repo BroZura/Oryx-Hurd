@@ -1,0 +1,15 @@
+# ca-certificates' postinst generates BOTH /etc/ca-certificates.conf and the
+# bundle. Without them every HTTPS client fails -- pip dies with a bare
+# FileNotFoundError inside certifi.where(), because Debian patches certifi to
+# use the system bundle.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/share/ca-certificates/*
+
+[Action]
+Description = Rebuilding CA certificate bundle...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-update-cacerts

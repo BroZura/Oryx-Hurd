@@ -1,0 +1,14 @@
+# GSettings schemas must be compiled into gschemas.compiled or anything using
+# them refuses to start. Xfce is unusable without this.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/share/glib-2.0/schemas/*.xml
+Target = usr/share/glib-2.0/schemas/*.gschema.override
+
+[Action]
+Description = Compiling GSettings schemas...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-regen glib-compile-schemas /usr/share/glib-2.0/schemas

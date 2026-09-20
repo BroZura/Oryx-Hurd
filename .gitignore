@@ -1,0 +1,11 @@
+# Python bytecode and interpreter caches
+__pycache__/
+*.py[cod]
+
+# Local virtual environments
+.venv/
+venv/
+
+# Editor and OS metadata
+.DS_Store
+*~

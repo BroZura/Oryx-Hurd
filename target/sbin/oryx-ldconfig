@@ -1,0 +1,8 @@
+#!/bin/sh
+# Rebuild the shared library cache. Debian does this from a dpkg trigger;
+# pacman has none and the converter drops maintainer scripts.
+# Never fails: a failing hook aborts the pacman transaction.
+set -u
+command -v ldconfig >/dev/null 2>&1 || exit 0
+ldconfig >/dev/null 2>&1 || echo "    warning: ldconfig failed (ignored)"
+exit 0

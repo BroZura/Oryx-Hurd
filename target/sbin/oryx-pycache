@@ -1,0 +1,34 @@
+#!/bin/sh
+# Keep /usr/lib/python3/dist-packages' byte-cache consistent.
+#
+#   1. drop any __pycache__ whose source .py is gone (left by `pacman -R`,
+#      since the .pyc belong to no package and pacman will not remove them),
+#   2. drop empty __pycache__ directories and the now-empty package
+#      directories above them,
+#   3. byte-compile what is there, so the cache is in a known state.
+#
+# Never fails: a failing hook aborts the whole pacman transaction.
+set -u
+SITE=/usr/lib/python3/dist-packages
+[ -d "$SITE" ] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+# 1. orphaned .pyc -- "<mod>.cpython-3xx.pyc" is stale if "../<mod>.py" is gone
+find "$SITE" -type d -name __pycache__ 2>/dev/null | while read -r d; do
+    for pyc in "$d"/*.pyc; do
+        [ -e "$pyc" ] || continue
+        base=$(basename "$pyc"); mod=${base%%.cpython-*}
+        [ "$base" = "$mod" ] && mod=${base%.pyc}
+        [ -f "$d/../$mod.py" ] || rm -f "$pyc"
+    done
+done
+
+# 2. empty __pycache__, then empty directories left above them
+find "$SITE" -type d -name __pycache__ -empty -delete 2>/dev/null
+find "$SITE" -mindepth 1 -type d -empty -delete 2>/dev/null
+
+# 3. recompile. -q twice silences SyntaxWarning from vendored sources
+#    (nomadnet/vendor/quotes.py emits one and it is harmless).
+python3 -m compileall -qq "$SITE" >/dev/null 2>&1 \
+    || echo "    warning: byte-compilation reported errors (ignored)"
+exit 0

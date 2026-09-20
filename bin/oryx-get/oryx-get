@@ -1,0 +1,220 @@
+#!/usr/bin/python3
+# oryx-get -- fetch a package and make it installable, with no Oryx server
+# involved. Runs entirely on the box it's installed on (T400 today).
+#
+# STAGE A of this tool: [source:oryx] (type=repo, just pacman -S) and
+# [source:pypi] (type=pypi, wheel conversion via oryxget.convert). Debian
+# source (Stage B), protected-package refusal / maintainer-script scanning
+# (Stage C), and --export (Stage D) land in later stages -- see ISSUES.md /
+# FIXES.md for status. --search, --info, --dry-run, --allow-protected are
+# accepted here (so scripts calling this don't break across stages) but
+# some are no-ops until their stage lands; each says so if used before then.
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from oryxget import config as cfgmod
+from oryxget import sources as srcmod
+from oryxget import protected as protmod
+from oryxget import maintainer_scan
+
+
+def log(cfg: cfgmod.OryxGetConfig, msg: str) -> None:
+    cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg.log_path, "a") as f:
+        f.write(msg.rstrip("\n") + "\n")
+    print(msg)
+
+
+def cmd_install_repo(cand: srcmod.Candidate, dry_run: bool) -> int:
+    import subprocess
+    print(f"[oryx-get] {cand.pkgname} found in source '{cand.source_name}' (repo) -- pacman -S")
+    if dry_run:
+        print(f"[dry-run] would run: pacman -S {cand.pkgname}")
+        return 0
+    return subprocess.run(["pacman", "-S", "--noconfirm", cand.pkgname]).returncode
+
+
+def cmd_install_converted(cand: srcmod.Candidate, cfg: cfgmod.OryxGetConfig, dry_run: bool) -> int:
+    import subprocess
+    print(f"[oryx-get] {cand.pkgname} {cand.version} found via source '{cand.source_name}' "
+          f"({cand.source_type}) -- needs conversion")
+    if cand.unresolved_deps:
+        print(f"[oryx-get] warning: {cand.pkgname} declares dependencies not auto-resolved "
+              f"in this stage: {', '.join(cand.unresolved_deps)}")
+        print("           If the import fails, install those with oryx-get first.")
+    if dry_run:
+        print(f"[dry-run] would fetch, convert, and pacman -U {cand.pkgname}")
+        return 0
+
+    outdir = cfg.cache_dir / "built"
+    artifact = cand.fetch_fn()
+
+    if cand.source_type == "debian":
+        scan_result = maintainer_scan.scan(artifact)
+        maintainer_scan.warn(cand.pkgname, scan_result)
+
+    pkg_path = cand.convert_fn(artifact, outdir, cand.depends or [], cand.provenance)
+    log(cfg, f"converted {cand.pkgname} {cand.version} from {cand.provenance} -> {pkg_path}")
+    return subprocess.run(["pacman", "-U", "--noconfirm", str(pkg_path)]).returncode
+
+
+def install_candidate(cand: srcmod.Candidate, cfg: cfgmod.OryxGetConfig, dry_run: bool,
+                       done: set[str] | None = None, allow_protected: bool = False) -> int:
+    """Install `cand`, first recursively installing everything in
+    `cand.needs` (dependencies) that isn't already done in THIS run. Order
+    matters: pacman -U on a package whose dependency isn't installed yet
+    will refuse it, so needs must land first, depth-first.
+    """
+    if done is None:
+        done = set()
+    if cand.pkgname in done:
+        return 0
+
+    hits = protmod.find_protected(cand, cfg.protected)
+    if hits:
+        if not allow_protected:
+            print(f"[oryx-get] REFUSING: {cand.pkgname} would install/upgrade protected "
+                  f"package(s) {', '.join(hits)}. Pass --allow-protected to be asked to confirm.",
+                  file=sys.stderr)
+            return 1
+        if not dry_run and not protmod.confirm_protected(hits):
+            print("[oryx-get] confirmation did not match -- refusing.", file=sys.stderr)
+            return 1
+
+    rc = 0
+    for dep in cand.needs:
+        rc = install_candidate(dep, cfg, dry_run, done, allow_protected) or rc
+        if rc != 0 and not dry_run:
+            print(f"[oryx-get] dependency {dep.pkgname} failed -- not installing {cand.pkgname}",
+                  file=sys.stderr)
+            return rc
+    if cand.already_in_repo:
+        rc = cmd_install_repo(cand, dry_run) or rc
+    else:
+        rc = cmd_install_converted(cand, cfg, dry_run) or rc
+    done.add(cand.pkgname)
+    return rc
+
+
+def resolve_one(pkgname: str, sources: list, only_types: set[str] | None = None):
+    for src in sources:
+        if only_types and type(src).__name__.lower().replace("source", "") not in only_types:
+            continue
+        try:
+            cand = src.find(pkgname)
+        except srcmod.SourceError as e:
+            print(f"[oryx-get] {type(src).__name__} error for {pkgname}: {e}", file=sys.stderr)
+            continue
+        if cand:
+            return cand
+    return None
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="oryx-get")
+    ap.add_argument("packages", nargs="*")
+    ap.add_argument("--pypi", metavar="PKG", help="install PKG from PyPI (pure-Python wheel only)")
+    ap.add_argument("--search", metavar="TERM")
+    ap.add_argument("--info", metavar="PKG")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-deps", action="store_true")
+    ap.add_argument("--export", metavar="DIR")
+    ap.add_argument("--export-name", default="oryx", metavar="NAME",
+                     help="repository name for --export (must match the pacman.conf "
+                          "[section] a client will use, e.g. [oryx-export-test])")
+    ap.add_argument("--allow-protected", action="store_true")
+    ap.add_argument("--config", default=str(cfgmod.DEFAULT_CONF_PATH))
+    args = ap.parse_args(argv)
+
+    cfg = cfgmod.load(Path(args.config))
+    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
+    sources = srcmod.build_sources(cfg.sources)
+
+    if args.search:
+        found_any = False
+        for src in sources:
+            try:
+                hits = src.search(args.search)
+            except srcmod.SourceError as e:
+                print(f"[oryx-get] {type(src).__name__}: {e}", file=sys.stderr)
+                continue
+            for h in hits:
+                print(h)
+                found_any = True
+        return 0 if found_any else 1
+
+    if args.info:
+        for src in sources:
+            info = src.info(args.info) if hasattr(src, "info") else None
+            if info:
+                print(f"Name       : {info['name']}")
+                print(f"Version    : {info['version']}")
+                print(f"Source     : {info['source']}")
+                print(f"Description: {info['description']}")
+                print(f"Depends    : {', '.join(info['depends']) if info['depends'] else '(none)'}")
+                return 0
+        print(f"[oryx-get] {args.info}: not found in any configured source", file=sys.stderr)
+        return 1
+
+    if args.export:
+        from oryxget import export as exportmod
+        targets = []
+        if args.pypi:
+            for src in sources:
+                if isinstance(src, srcmod.PyPISource):
+                    c = src.find(args.pypi)
+                    if c:
+                        targets.append(c)
+                    break
+        for pkgname in args.packages:
+            c = resolve_one(pkgname, sources)
+            if c is None:
+                print(f"[oryx-get] {pkgname}: not found in any configured source", file=sys.stderr)
+                return 1
+            targets.append(c)
+        if not targets:
+            print("[oryx-get] --export needs at least one package (or --pypi PKG)", file=sys.stderr)
+            return 2
+        rc = 0
+        for c in targets:
+            hits = protmod.find_protected(c, cfg.protected)
+            if hits and not args.allow_protected:
+                print(f"[oryx-get] REFUSING to export {c.pkgname}: touches protected "
+                      f"package(s) {', '.join(hits)}. Pass --allow-protected to confirm.",
+                      file=sys.stderr)
+                rc = 1
+                continue
+            rc = exportmod.export(c, cfg, Path(args.export), args.dry_run, args.export_name) or rc
+        return rc
+
+    rc = 0
+    done: set[str] = set()
+    if args.pypi:
+        cand = None
+        for src in sources:
+            if isinstance(src, srcmod.PyPISource):
+                cand = src.find(args.pypi)
+                break
+        if cand is None:
+            print(f"[oryx-get] {args.pypi}: not found on PyPI (or no [source:pypi] configured)", file=sys.stderr)
+            return 1
+        rc = install_candidate(cand, cfg, args.dry_run, done, args.allow_protected) or rc
+
+    for pkgname in args.packages:
+        cand = resolve_one(pkgname, sources)
+        if cand is None:
+            print(f"[oryx-get] {pkgname}: not found in any configured source", file=sys.stderr)
+            rc = 1
+            continue
+        rc = install_candidate(cand, cfg, args.dry_run, done, args.allow_protected) or rc
+
+    if not args.packages and not args.pypi:
+        ap.print_usage()
+        return 2
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

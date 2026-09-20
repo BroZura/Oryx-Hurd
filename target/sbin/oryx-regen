@@ -1,0 +1,19 @@
+#!/bin/sh
+# oryx-regen <command> [args...]
+#
+# Generic pacman-hook helper: run a cache-regenerating command IF it exists,
+# otherwise do nothing. Used for glib-compile-schemas, update-mime-database,
+# update-desktop-database and fc-cache.
+#
+# A failing pacman hook aborts the entire transaction, so this NEVER returns
+# non-zero. Debian runs these from dpkg triggers; pacman has no equivalent and
+# the converter drops maintainer scripts, so the caches are otherwise stale or
+# absent -- which is fatal for a desktop (GSettings schemas in particular:
+# anything using them refuses to start without gschemas.compiled).
+set -u
+cmd=${1:-}
+[ -n "$cmd" ] || exit 0
+shift
+command -v "$cmd" >/dev/null 2>&1 || exit 0
+"$cmd" "$@" >/dev/null 2>&1 || echo "    warning: $cmd failed (ignored)"
+exit 0

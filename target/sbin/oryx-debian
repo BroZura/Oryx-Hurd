@@ -1,0 +1,60 @@
+#! /bin/sh
+# Mount or unmount the Debian GNU/Hurd partition (wd0s2) from Oryx.
+#
+#   oryx-debian mount     read-only  (default, and what you want)
+#   oryx-debian rw        read-write (for committing to /root/archhurd)
+#   oryx-debian umount
+#   oryx-debian status
+#
+# This was impossible until 2026-09-20. Every /dev/wd0sN node carried the
+# store "@/dev/disk:wd0", and /dev/disk does not exist on this system -- only
+# the boot-time rumpdisk's Mach device does, which is what the root
+# filesystem itself uses ("part:3:device:wd0"). Repointing the nodes at
+# "device:wd0" made both the swap partition and this one reachable.
+#
+# Creating /dev/disk the documented way, `MAKEDEV rumpdisk`, would start a
+# SECOND rumpdisk translator competing for the same controller the running
+# system boots from. That is the netdde double-start hazard with the disk at
+# stake instead of the network card. Do not.
+#
+# ############ WHY THIS IS NOT MOUNTED AUTOMATICALLY ############
+#
+# Debian's /dev is full of passive translators, and on the Hurd merely
+# OPENING such a node starts that translator in the RUNNING system. A second
+# netdde grabs the network card and kills networking -- this happened three
+# times during the original build. A stat-ing glob, `ls -l`, an updatedb run
+# or a plain `find /` wandering into /mnt/debian/dev is enough.
+#
+# So: mount it when you need it, unmount it when you are done, and never let
+# anything walk /mnt/debian/dev. `find /mnt/debian -xdev` is not sufficient
+# protection -- it is the same filesystem.
+set -u
+MNT=/mnt/debian
+DEV=/dev/wd0s2
+
+case "${1:-status}" in
+    mount|ro)
+        mkdir -p "$MNT" 2>/dev/null
+        settrans -a "$MNT" /hurd/ext2fs --readonly "$DEV" \
+            && echo "$MNT mounted read-only" \
+            || { echo "mount failed" >&2; exit 1; }
+        ;;
+    rw)
+        mkdir -p "$MNT" 2>/dev/null
+        settrans -a "$MNT" /hurd/ext2fs "$DEV" || { echo "mount failed" >&2; exit 1; }
+        # settrans -a ... -w silently ignores -w; the writability has to be
+        # asked for afterwards or writes fail in confusing ways.
+        fsysopts "$MNT" --writable && echo "$MNT mounted READ-WRITE"
+        echo "Remember: Debian is not running, but its translators will start" >&2
+        echo "if anything opens a node under $MNT/dev. Unmount when done." >&2
+        ;;
+    umount|unmount)
+        settrans -fg "$MNT" && echo "$MNT unmounted"
+        ;;
+    status)
+        t=$(showtrans "$MNT" 2>/dev/null)
+        if [ -n "$t" ]; then echo "$MNT: $t"; else echo "$MNT: not mounted"; fi
+        ;;
+    *)
+        echo "usage: $0 {mount|rw|umount|status}" >&2; exit 2 ;;
+esac

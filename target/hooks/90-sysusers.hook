@@ -1,0 +1,10 @@
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/sysusers.d/*
+
+[Action]
+Description = Creating system users and groups...
+When = PostTransaction
+Exec = /usr/local/sbin/oryx-sysusers
